@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 
 from tensorflow import keras
 from rbm_model import RBM
+from PIL import Image
+from imgs.utils import tile_raster_images
 
 train, test = keras.datasets.mnist.load_data()
 
@@ -40,3 +42,12 @@ for epoch in range(epochs):
 print('')
 # Evaluation
 run(test_dataset, train=False)
+# Run a 3 digit image through our model
+img = Image.open('./imgs/3.jpg')
+sample_case = np.array(img.convert('I').resize((28, 28))).ravel().reshape((1, -1))/255.0
+output = model.predict(sample_case)
+# Show reconstructed image
+img = Image.fromarray(tile_raster_images(X=output, img_shape=(28, 28), tile_shape=(1, 1), tile_spacing=(1, 1)))
+plt.rcParams['figure.figsize'] = (4.0, 4.0)
+plt.imshow(img, cmap="gray")
+plt.show()
