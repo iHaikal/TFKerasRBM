@@ -9,6 +9,7 @@ class RBM(Model):
     def __init__(self,
                  visible_units,
                  hidden_units,
+                 momentum=0.95,
                  name='rbm'):
         super(RBM, self).__init__(name=name)
         
@@ -25,6 +26,12 @@ class RBM(Model):
                                   initializer='zeros',
                                   trainable=True,
                                   name="hb")
+        
+        self.momentum = momentum
+        
+        self.dW = tf.Variable(tf.zeros((visible_units, hidden_units)), dtype=tf.float32)
+        self.dVB = tf.Variable(tf.zeros((visible_units, )), dtype=tf.float32)
+        self.dHB = tf.Variable(tf.zeros((hidden_units, )), dtype=tf.float32)
         
         self.mse = losses.MeanSquaredError()
         
@@ -52,15 +59,24 @@ class RBM(Model):
     def evaluate(self, inputs):
         return self.mse(inputs, self.call(inputs))
     
+    def new_delta(self, old, new):
+        return old * self.momentum + new * (1 - self.momentum)
+    
     def train(self, inputs, learning_rate):
         current_loss = self.evaluate(inputs)
         
-        dW = tf.matmul(tf.transpose(inputs), self.h0_prob) - \
-            tf.matmul(tf.transpose(self.v_state), self.h1_prob)
-           
-        self.w.assign_add(learning_rate * dW)
-        self.vb.assign_add(learning_rate * tf.reduce_mean(inputs - self.v_state, 0))
-        self.hb.assign_add(learning_rate * tf.reduce_mean(self.h0_state - self.h1_state, 0)) 
+        dW = learning_rate * (tf.matmul(tf.transpose(inputs), self.h0_prob) - \
+            tf.matmul(tf.transpose(self.v_state), self.h1_prob))
+        dVB = learning_rate * tf.reduce_mean(inputs - self.v_state, 0)
+        dHB = learning_rate * tf.reduce_mean(self.h0_state - self.h1_state, 0)
+        
+        self.dW = self.new_delta(self.dW, dW)
+        self.dVB = self.new_delta(self.dVB, dVB)
+        self.dHB = self.new_delta(self.dHB, dHB)
+        
+        self.w.assign_add(self.dW)
+        self.vb.assign_add(self.dVB)
+        self.hb.assign_add(self.dHB) 
         
         return current_loss
         
