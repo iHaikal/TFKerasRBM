@@ -1,8 +1,35 @@
 import tensorflow as tf
 from tensorflow.python.keras import layers, Model, backend, losses
+from enum import Enum
 
 def bernoulli_sample(prob):
     return tf.nn.relu(tf.sign(prob - backend.random_uniform(tf.shape(prob))))
+
+class DenseRBM(layers.Layer):
+    
+    def __init__(self,
+                 units,
+                 name='rbm_dense_layer'):
+        super(DenseRBM, self).__init__(name=name)
+        
+        self.b = self.add_weight(shape=(units, ),
+                                 initializer='zeros',
+                                 trainable=True,
+                                 name="b")
+    
+    def prob_dist(self, inputs, weights):
+        return tf.sigmoid(tf.matmul(inputs, weights) + self.b)
+    
+    def call(self, inputs, weights):
+        prob = self.prob_dist(inputs, weights)
+        state = bernoulli_sample(prob)
+        
+        return prob, state
+
+class PredictedOutput(Enum):
+    both = 'all'
+    hidden = 'hidden'
+    visible = 'visible'
 
 class RBM(Model):
     
@@ -10,6 +37,7 @@ class RBM(Model):
                  visible_units,
                  hidden_units,
                  momentum=0.95,
+                 k=1,
                  name='rbm'):
         super(RBM, self).__init__(name=name)
         
@@ -18,15 +46,11 @@ class RBM(Model):
                                  trainable=True,
                                  name="w"
                                  )
-        self.vb = self.add_weight(shape=(visible_units, ),
-                                  initializer='zeros',
-                                  trainable=True,
-                                  name="vb")
-        self.hb = self.add_weight(shape=(hidden_units, ),
-                                  initializer='zeros',
-                                  trainable=True,
-                                  name="hb")
         
+        self.v = DenseRBM(visible_units)
+        self.h = DenseRBM(hidden_units)
+        self.k = k
+
         self.momentum = momentum
         
         self.dW = tf.Variable(tf.zeros((visible_units, hidden_units)), dtype=tf.float32)
@@ -34,30 +58,44 @@ class RBM(Model):
         self.dHB = tf.Variable(tf.zeros((hidden_units, )), dtype=tf.float32)
         
         self.mse = losses.MeanSquaredError()
-        
-        self.v_state = tf.Variable(0.0)
-        self.v_prob = tf.Variable(0.0)
-        self.h0_prob = tf.Variable(0.0)
-        self.h0_state = tf.Variable(0.0)
-        self.h1_prob = tf.Variable(0.0)
-        self.h1_state = tf.Variable(0.0)
-    
-    def dense(self, state, w, b):
-        prob = tf.sigmoid(tf.matmul(state, w) + b)
-        new_state = bernoulli_sample(prob)
-        
-        return prob, new_state
     
     def call(self, inputs):
-        self.h0_prob, self.h0_state = self.dense(inputs, self.w, self.hb)
-        self.v_prob, self.v_state = self.dense(self.h0_state, tf.transpose(self.w), self.vb)
+        h_prob, h_state = self.h(inputs, weights=self.w)
+        v_prob, v_state = self.v(h_state, weights=tf.transpose(self.w))
         
-        self.h1_prob, self.h1_state = self.dense(self.v_state, self.w, self.hb)
-        
-        return self.v_state
+        return (h_prob, h_state) , (v_prob, v_state)
     
+    def predict(self, inputs, predict_output=PredictedOutput.both): 
+        h_prob, h_state, v_prob, v_state = super(RBM, self).predict(inputs)
+        
+        if predict_output == PredictedOutput.both:
+            return (h_prob, h_state), (v_prob, v_state) 
+        elif predict_output == PredictedOutput.hidden:
+            return (h_prob, h_state)
+        else:
+            return (v_prob, v_state)
+        
+    
+    def CD_k(self, inputs):
+        v = inputs
+        h0, h = self.h(v, weights=self.w)
+        
+        trans_w = tf.transpose(self.w)
+        for _ in range(self.k):
+            _, v = self.v(h, weights=trans_w)
+            _, h = self.h(v, weights=self.w)
+        
+        dW = tf.matmul(tf.transpose(inputs), h0) - tf.matmul(tf.transpose(v), h)
+        dHB = tf.reduce_mean(h0 - h, 0)
+        dVB = tf.reduce_mean(inputs - v, 0)
+        
+        return dW, dHB, dVB
+    
+    # TODO: Replace MSE with Pseudo-likelihood
     def evaluate(self, inputs):
-        return self.mse(inputs, self.call(inputs))
+        _, v = self.call(inputs)
+        _, v = v
+        return self.mse(inputs, v)
     
     def new_delta(self, old, new):
         return old * self.momentum + new * (1 - self.momentum)
@@ -65,18 +103,15 @@ class RBM(Model):
     def train(self, inputs, learning_rate):
         current_loss = self.evaluate(inputs)
         
-        dW = learning_rate * (tf.matmul(tf.transpose(inputs), self.h0_prob) - \
-            tf.matmul(tf.transpose(self.v_state), self.h1_prob))
-        dVB = learning_rate * tf.reduce_mean(inputs - self.v_state, 0)
-        dHB = learning_rate * tf.reduce_mean(self.h0_state - self.h1_state, 0)
+        dW, dHB, dVB = self.CD_k(inputs)
         
-        self.dW = self.new_delta(self.dW, dW)
-        self.dVB = self.new_delta(self.dVB, dVB)
-        self.dHB = self.new_delta(self.dHB, dHB)
+        self.dW = self.new_delta(self.dW, learning_rate *  dW)
+        self.dVB = self.new_delta(self.dVB, learning_rate * dVB)
+        self.dHB = self.new_delta(self.dHB, learning_rate * dHB)
         
         self.w.assign_add(self.dW)
-        self.vb.assign_add(self.dVB)
-        self.hb.assign_add(self.dHB) 
+        self.v.b.assign_add(self.dVB)
+        self.h.b.assign_add(self.dHB) 
         
         return current_loss
         
