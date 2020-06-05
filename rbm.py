@@ -33,6 +33,8 @@ class PredictedOutput(Enum):
 
 class RBM(Model):
     
+    i = 0 # fliping index for computing pseudo_likelihood
+    
     def __init__(self,
                  visible_units,
                  hidden_units,
@@ -46,6 +48,8 @@ class RBM(Model):
                                  trainable=True,
                                  name="w"
                                  )
+        
+        self.visible_units = visible_units
         
         self.v = DenseRBM(visible_units)
         self.h = DenseRBM(hidden_units)
@@ -91,11 +95,25 @@ class RBM(Model):
         
         return dW, dHB, dVB
     
-    # TODO: Replace MSE with Pseudo-likelihood
+    def free_energy(self, inputs):
+        wx_b = tf.matmul(inputs, self.w) + self.h.b
+        vbias_term = tf.matmul(inputs, tf.reshape(self.v.b, [tf.shape(self.v.b)[0], 1]))
+        hidden_term = tf.reduce_sum(tf.math.log(1 + tf.exp(wx_b)), axis=1)
+        return -hidden_term - vbias_term 
+    
+    def pseudo_likelihood(self, inputs):
+        x = tf.round(inputs)
+        x_fe = self.free_energy(x)
+        
+        split0, split1, split2 = tf.split(x, [self.i, 1, tf.shape(x)[1] - self.i - 1], 1)
+        xi = tf.concat([split0, 1 - split1, split2], 1)
+        self.i = (self.i + 1) % self.visible_units
+        xi_fe = self.free_energy(xi)
+        
+        return tf.reduce_mean(self.visible_units * tf.math.log(tf.sigmoid(xi_fe - x_fe)), axis=0)
+    
     def evaluate(self, inputs):
-        _, v = self.call(inputs)
-        _, v = v
-        return self.mse(inputs, v)
+        return self.pseudo_likelihood(inputs)
     
     def new_delta(self, old, new):
         return old * self.momentum + new * (1 - self.momentum)
