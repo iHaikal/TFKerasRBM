@@ -69,15 +69,15 @@ class RBM(Model):
         
         return (h_prob, h_state) , (v_prob, v_state)
     
-    def predict(self, inputs, predict_output=PredictedOutput.both): 
-        h_prob, h_state, v_prob, v_state = super(RBM, self).predict(inputs)
+    def predict(self, inputs, predict_output=PredictedOutput.visible): 
+        h, v = super(RBM, self).predict(inputs)
         
         if predict_output == PredictedOutput.both:
-            return (h_prob, h_state), (v_prob, v_state) 
+            return h, v
         elif predict_output == PredictedOutput.hidden:
-            return (h_prob, h_state)
+            return h
         else:
-            return (v_prob, v_state)
+            return v
         
     
     def CD_k(self, inputs):
