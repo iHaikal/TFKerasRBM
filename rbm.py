@@ -97,7 +97,7 @@ class RBM(Model):
     
     def free_energy(self, inputs):
         wx_b = tf.matmul(inputs, self.w) + self.h.b
-        vbias_term = tf.matmul(inputs, tf.reshape(self.v.b, [tf.shape(self.v.b)[0], 1]))
+        vbias_term = tf.tensordot(inputs, tf.reshape(self.v.b, [tf.shape(self.v.b)[0]]), 1)
         hidden_term = tf.reduce_sum(tf.math.log(1 + tf.exp(wx_b)), axis=1)
         return -hidden_term - vbias_term 
     
@@ -113,7 +113,9 @@ class RBM(Model):
         return tf.reduce_mean(self.visible_units * tf.math.log(tf.sigmoid(xi_fe - x_fe)), axis=0)
     
     def evaluate(self, inputs):
-        return self.pseudo_likelihood(inputs)
+        _, v = self.call(inputs)
+        _, v = v
+        return self.mse(inputs, v)
     
     def new_delta(self, old, new):
         return old * self.momentum + new * (1 - self.momentum)
